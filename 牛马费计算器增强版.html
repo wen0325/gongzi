@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>实时牛马费追踪器</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: 2em auto;
+      padding: 20px;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      background: #e0f7fa;
+      transition: background 1s ease-in-out;
+      overflow: hidden;
+    }
+
+    label {
+      display: block;
+      margin-top: 10px;
+    }
+
+    input[type="text"], input[type="number"], input[type="time"] {
+      width: 100%;
+      padding: 8px;
+      margin-top: 5px;
+    }
+
+    .time-group {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .time-group input {
+      flex: 1;
+    }
+
+    button {
+      margin-top: 15px;
+      padding: 10px 20px;
+      font-size: 16px;
+    }
+
+    .timer {
+      margin-top: 20px;
+      padding: 20px;
+      background: #fff3cd;
+      border: 1px solid #ffeeba;
+      border-radius: 10px;
+      text-align: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    .salary-display {
+      font-size: 24px;
+      font-weight: bold;
+      color: #2e7d32;
+      margin: 10px 0;
+      transition: all 0.3s ease-in-out;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 20px;
+      background: #e0e0e0;
+      border-radius: 10px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+
+    .progress {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(to right, #4caf50, #81c784);
+      transition: width 0.5s ease-in-out;
+      background-size: 200% 100%;
+      animation: stripe 2s linear infinite;
+    }
+
+    .result {
+      margin-top: 20px;
+      padding: 15px;
+      background: #f0f0f0;
+      border-radius: 5px;
+      font-family: monospace;
+      font-size: 16px;
+    }
+
+    @keyframes stripe {
+      0% { background-position: 0 0; }
+      100% { background-position: -100% 0; }
+    }
+
+    /* 美化后的金币样式（放大 + 动画加速） */
+    .coin {
+      position: absolute;
+      top: -60px;
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #ffdf00, #c7a700);
+      box-shadow: 0 0 10px rgba(255, 215, 0, 0.9), 0 0 20px rgba(255, 215, 0, 0.7) inset;
+      animation: fall 0.8s linear;
+      z-index: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 30px;
+      transform: scale(1);
+      opacity: 1;
+    }
+
+    @keyframes fall {
+      0% {
+        transform: translateY(0) rotate(0deg) scale(1);
+        opacity: 1;
+      }
+      100% {
+        transform: translateY(500px) rotate(720deg) scale(0.8);
+        opacity: 0;
+      }
+    }
+
+    .coin::before {
+      content: "¥";
+      font-size: 30px;
+      color: #fffbe6;
+      text-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+    }
+  </style>
+</head>
+<body>
+  <h2>实时牛马费追踪器</h2>
+
+  <label>月薪（元）：</label>
+  <input type="number" id="salary" min="0" step="100" value="10000" />
+
+  <label>月计薪天数：</label>
+  <input type="number" id="workDays" min="1" step="0.1" value="21.75" placeholder="如 21.75 或 30" />
+
+  <label>时间段 1（必填）：</label>
+  <div class="time-group">
+    <input type="time" id="timeStart1" value="09:00" required />
+    <span>至</span>
+    <input type="time" id="timeEnd1" value="12:00" required />
+  </div>
+
+  <label>时间段 2（必填）：</label>
+  <div class="time-group">
+    <input type="time" id="timeStart2" value="13:00" required />
+    <span>至</span>
+    <input type="time" id="timeEnd2" value="18:00" required />
+  </div>
+
+  <button onclick="startTimer()">生成</button>
+
+  <div class="timer" id="timerDisplay" style="display:none;">
+    <h3>当前薪资追踪</h3>
+    <div class="salary-display" id="currentSalary">0.00 元</div>
+    <div class="progress-bar">
+      <div class="progress" id="progressBar"></div>
+    </div>
+    <div class="result" id="result">
+      当前时间：<span id="currentTime">--:--:--</span><br>
+      当前时间段：<span id="currentPeriod">--:-- - --:--</span><br>
+      已工作时间：<span id="elapsedTime">0 小时 0 分钟 0 秒</span><br>
+      累计薪资：<span id="totalSalary">0.00 元</span>
+    </div>
+  </div>
+
+  <!-- 金币容器 -->
+  <div id="coinContainer"></div>
+
+  <!-- 金币音效 -->
+  <audio id="coinSound" src="https://cdn.pixabay.com/audio/2022/03/10/audio_5835b4b79e.mp3"></audio>
+
+  <script>
+    let timerInterval = null;
+    let startTime = null;
+    let workRanges = [];
+    let hourlyRate = 0;
+    let dailyMaxWorkTimeSec = 0;
+    let coinCount = 0;
+    const MAX_COINS = 50;
+
+    // 预加载音效
+    const coinSound = document.getElementById("coinSound");
+
+    function parseTime(timeStr) {
+      const [hours, minutes] = timeStr.split(':').map(Number);
+      if (isNaN(hours) || isNaN(minutes)) {
+        throw new Error("时间格式错误，请选择有效时间");
+      }
+      return { hours, minutes };
+    }
+
+    function parseWorkHours() {
+      const ranges = [];
+
+      const start1 = document.getElementById('timeStart1').value.trim();
+      const end1 = document.getElementById('timeEnd1').value.trim();
+      if (!start1 || !end1) {
+        alert("请填写时间段 1 的开始和结束时间");
+        return null;
+      }
+
+      const start2 = document.getElementById('timeStart2').value.trim();
+      const end2 = document.getElementById('timeEnd2').value.trim();
+      if (!start2 || !end2) {
+        alert("请填写时间段 2 的开始和结束时间");
+        return null;
+      }
+
+      ranges.push({ start: parseTime(start1), end: parseTime(end1) });
+      ranges.push({ start: parseTime(start2), end: parseTime(end2) });
+
+      return ranges;
+    }
+
+    function isWorkTime(now, workRanges) {
+      const nowSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+      for (const range of workRanges) {
+        const startSeconds = range.start.hours * 3600 + range.start.minutes * 60;
+        const endSeconds = range.end.hours * 3600 + range.end.minutes * 60;
+        if (nowSeconds >= startSeconds && nowSeconds <= endSeconds) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function formatTime(date) {
+      return date.toTimeString().split(' ')[0];
+    }
+
+    function updateTimer() {
+      const now = new Date();
+      const currentTimeSpan = document.getElementById('currentTime');
+      const currentPeriodSpan = document.getElementById('currentPeriod');
+      const elapsedTimeSpan = document.getElementById('elapsedTime');
+      const totalSalarySpan = document.getElementById('totalSalary');
+      const salaryDisplay = document.getElementById('currentSalary');
+      const progressBar = document.getElementById('progressBar');
+
+      if (!isWorkTime(now, workRanges)) {
+        salaryDisplay.textContent = '当前非工作时间';
+        progressBar.style.width = '0%';
+        return;
+      }
+
+      const lastRange = workRanges[workRanges.length - 1];
+      const lastEndSec = lastRange.end.hours * 3600 + lastRange.end.minutes * 60;
+      const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+
+      if (nowSec > lastEndSec) {
+        clearInterval(timerInterval);
+        salaryDisplay.textContent = '今日工作已结束';
+        totalSalarySpan.textContent = `${(hourlyRate * (dailyMaxWorkTimeSec / 3600)).toFixed(2)} 元`;
+        progressBar.style.width = '100%';
+        return;
+      }
+
+      const elapsedMs = now - startTime;
+      const elapsedSec = Math.floor(elapsedMs / 1000);
+      const hours = Math.floor(elapsedSec / 3600);
+      const minutes = Math.floor((elapsedSec % 3600) / 60);
+      const seconds = elapsedSec % 60;
+
+      let currentStart = '--:--', currentEnd = '--:--';
+      let currentPeriodElapsed = 0;
+
+      for (const range of workRanges) {
+        const startSec = range.start.hours * 3600 + range.start.minutes * 60;
+        const endSec = range.end.hours * 3600 + range.end.minutes * 60;
+        const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+
+        if (nowSec >= startSec && nowSec <= endSec) {
+          currentStart = `${String(range.start.hours).padStart(2, '0')}:${String(range.start.minutes).padStart(2, '0')}`;
+          currentEnd = `${String(range.end.hours).padStart(2, '0')}:${String(range.end.minutes).padStart(2, '0')}`;
+          currentPeriodElapsed = nowSec - startSec;
+          break;
+        }
+      }
+
+      const secondlyRate = hourlyRate / 3600;
+      const totalSalary = Math.min(secondlyRate * elapsedSec, hourlyRate * (dailyMaxWorkTimeSec / 3600));
+
+      currentTimeSpan.textContent = formatTime(now);
+      currentPeriodSpan.textContent = `${currentStart} - ${currentEnd}`;
+      elapsedTimeSpan.textContent = `${hours} 小时 ${minutes} 分钟 ${seconds} 秒`;
+      totalSalarySpan.textContent = totalSalary.toFixed(2) + " 元";
+      salaryDisplay.textContent = `当前薪资：${(secondlyRate * currentPeriodElapsed).toFixed(2)} 元`;
+
+      const progress = (elapsedSec / dailyMaxWorkTimeSec) * 100;
+      progressBar.style.width = Math.min(progress, 100) + '%';
+
+      const hue = 120 - (progress * 0.6);
+      document.body.style.background = `hsl(${hue}, 50%, 90%)`;
+
+      // 金币掉落逻辑：70% 概率触发
+      if (coinCount < MAX_COINS && Math.random() < 0.7) {
+        createCoin();
+        coinCount++;
+      }
+    }
+
+    function createCoin() {
+      const coin = document.createElement('div');
+      coin.className = 'coin';
+      coin.style.left = `${Math.random() * 100}%`;
+      // 金币动画持续时间：0.7~1.5秒
+      coin.style.animationDuration = `${Math.random() * 0.8 + 0.7}s`;
+      document.getElementById('coinContainer').appendChild(coin);
+
+      // 播放金币音效
+      if (coinSound) {
+        coinSound.currentTime = 0;
+        coinSound.play().catch(() => {});
+      }
+
+      coin.addEventListener('animationend', () => {
+        coin.remove();
+        coinCount--;
+      });
+    }
+
+    function startTimer() {
+      const salary = parseFloat(document.getElementById('salary').value);
+      const workDays = parseFloat(document.getElementById('workDays').value);
+
+      workRanges = parseWorkHours();
+      if (!workRanges) return;
+
+      dailyMaxWorkTimeSec = 0;
+      for (const range of workRanges) {
+        const startSeconds = range.start.hours * 3600 + range.start.minutes * 60;
+        const endSeconds = range.end.hours * 3600 + range.end.minutes * 60;
+        dailyMaxWorkTimeSec += endSeconds - startSeconds;
+      }
+
+      const dailyWorkHours = dailyMaxWorkTimeSec / 3600;
+      const totalMonthlyHours = dailyWorkHours * workDays;
+      hourlyRate = salary / totalMonthlyHours;
+
+      startTime = new Date();
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(updateTimer, 1000);
+
+      document.getElementById('timerDisplay').style.display = 'block';
+      updateTimer();
+    }
+  </script>
+</body>
+</html>
